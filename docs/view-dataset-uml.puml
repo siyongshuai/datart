@@ -1,0 +1,291 @@
+@startuml View(Dataset)核心操作行为UML
+
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam backgroundColor #FEFEFE
+skinparam roundcorner 8
+skinparam class {
+    BackgroundColor #F8F9FA
+    BorderColor #495057
+    ArrowColor #6C757D
+    HeaderBackgroundColor #495057
+    FontColor #212529
+}
+
+title Datart View(Dataset) 核心操作行为 UML 图
+
+package "Entity Layer 实体层" #E8F4F8 {
+    
+    abstract class BaseEntity {
+        - id: String
+        - createBy: String
+        - createTime: Date
+        - updateBy: String
+        - updateTime: Date
+        - permission: Integer
+    }
+    
+    class View <<Dataset>> {
+        - name: String
+        - description: String
+        - orgId: String
+        - sourceId: String
+        - script: String
+        - type: String
+        - model: String
+        - config: String
+        - parentId: String
+        - isFolder: Boolean
+        - index: Double
+        - status: Byte
+    }
+    
+    class ViewDetailDTO {
+        - relSubjectColumns: List<RelSubjectColumns>
+        - variables: List<Variable>
+        - relVariableSubjects: List<RelVariableSubject>
+    }
+    
+    class Variable {
+        - orgId: String
+        - viewId: String
+        - sourceId: String
+        - name: String
+        - type: String
+        - valueType: String
+        - format: String
+        - encrypt: Boolean
+        - label: String
+        - defaultValue: String
+        - expression: Boolean
+    }
+    
+    class Source {
+        - name: String
+        - config: String
+        - type: String
+        - orgId: String
+        - parentId: String
+        - isFolder: Boolean
+        - index: Double
+        - status: Byte
+    }
+    
+    class RelSubjectColumns {
+        - viewId: String
+        - subjectId: String
+        - columnPermission: String
+    }
+    
+    View --|> BaseEntity
+    Variable --|> BaseEntity
+    Source --|> BaseEntity
+    ViewDetailDTO --|> View
+    
+    View "1" --> "0..*" Variable : contains
+    View "0..*" --> "1" Source : references
+    View "1" --> "0..*" RelSubjectColumns : has
+}
+
+package "Service Layer 服务层" #FFF3CD {
+    
+    interface BaseCRUDService<E, M> {
+        + create(param: BaseCreateParam): E
+        + retrieve(id: String): E
+        + update(param: BaseUpdateParam): boolean
+        + delete(id: String, archive: boolean): boolean
+        + archive(id: String): boolean
+        + unarchive(id: String): boolean
+        + checkUnique(entity: BaseEntity): boolean
+        + requirePermission(entity: E, permission: int)
+        + deletePermissions(e: E)
+        + deleteReference(e: E)
+    }
+    
+    interface VizCRUDService<E, M> {
+        + create(param: BaseCreateParam): E
+        + listArchived(orgId: String): List<E>
+        + updateStatus(id: String, status: byte): boolean
+        + getRoleService(): RoleService
+    }
+    
+    interface ViewService {
+        + getViewDetail(viewId: String): ViewDetailDTO
+        + getViews(orgId: String): List<View>
+        + updateView(param: BaseUpdateParam): View
+        + unarchive(id: String, newName: String, parentId: String, index: double): boolean
+        + updateBase(param: ViewBaseUpdateParam): boolean
+        + checkUnique(orgId: String, parentId: String, name: String): boolean
+    }
+    
+    interface ResourceTransferService<T, R, RT, F> {
+        + getAllParents(id: String): List<T>
+        + exportResource(config: TransferConfig, ids: Set<String>): R
+        + importResource(model: R, strategy: ImportStrategy, orgId: String): boolean
+        + replaceId(model: R, sourceIdMapping: Map, viewIdMapping: Map, chartIdMapping: Map, boardIdMapping: Map, folderIdMapping: Map)
+    }
+    
+    class ViewServiceImpl {
+        - viewMapper: ViewMapperExt
+        - rscMapper: RelSubjectColumnsMapperExt
+        - rrrMapper: RelRoleResourceMapperExt
+        - roleService: RoleService
+        - variableService: VariableService
+        --
+        + create(param: BaseCreateParam): View
+        + getViewDetail(viewId: String): ViewDetailDTO
+        + getViews(orgId: String): List<View>
+        + updateView(param: BaseUpdateParam): View
+        + update(param: BaseUpdateParam): boolean
+        + unarchive(id: String, newName: String, parentId: String, index: double): boolean
+        + updateBase(param: ViewBaseUpdateParam): boolean
+        + deleteReference(view: View)
+        + requirePermission(view: View, permission: int)
+        + checkUnique(orgId: String, parentId: String, name: String): boolean
+        + safeDelete(id: String): boolean
+        + exportResource(config: TransferConfig, ids: Set<String>): ViewResourceModel
+        + importResource(model: ViewResourceModel, strategy: ImportStrategy, orgId: String): boolean
+        + getAllParents(viewId: String): List<View>
+        - hasPermission(role: Role, view: View, permission: int): boolean
+        - importView(model: ViewResourceModel, orgId: String, deleteFirst: boolean)
+        - getParent(list: List<View>, parentId: String)
+    }
+    
+    interface DataProviderService {
+        + testExecute(param: TestExecuteParam): Dataframe
+        + execute(param: ViewExecuteParam): Dataframe
+        + execute(param: ViewExecuteParam, checkViewPermission: boolean): Dataframe
+        + testConnection(source: DataProviderSource): Object
+        + readAllDatabases(sourceId: String): Set<String>
+        + readTables(sourceId: String, database: String): Set<String>
+        + readTableColumns(sourceId: String, schema: String, table: String): Set<Column>
+        + parseDataProviderConfig(source: Source): DataProviderSource
+    }
+    
+    VizCRUDService --|> BaseCRUDService
+    ViewService --|> VizCRUDService
+    ViewService --|> ResourceTransferService
+    ViewServiceImpl ..|> ViewService
+}
+
+package "Controller Layer 控制器层" #D4EDDA {
+    
+    class ViewController {
+        - viewService: ViewService
+        --
+        + checkViewName(param: CheckNameParam): ResponseData<Boolean>
+        + listViews(orgId: String): ResponseData<List<View>>
+        + getViewDetail(viewId: String): ResponseData<ViewDetailDTO>
+        + createView(param: ViewCreateParam): ResponseData<View>
+        + updateView(viewId: String, param: ViewUpdateParam): ResponseData<View>
+        + updateViewBaseInfo(viewId: String, param: ViewBaseUpdateParam): ResponseData<Boolean>
+        + deleteView(viewId: String, archive: boolean): ResponseData<Boolean>
+        + listArchived(orgId: String): ResponseData<List<View>>
+        + unarchive(viewId: String, name: String, index: Double, parentId: String): ResponseData<Boolean>
+    }
+    
+    class DataProviderController {
+        - dataProviderService: DataProviderService
+        --
+        + listSupportedDataProviders(): ResponseData<List<DataProviderInfo>>
+        + getSourceConfigTemplate(type: String): ResponseData<DataProviderConfigTemplate>
+        + testConnection(config: DataProviderSource): ResponseData<Object>
+        + listDatabases(sourceId: String): ResponseData<Set<String>>
+        + listTables(sourceId: String, database: String): ResponseData<Set<String>>
+        + getTableInfo(sourceId: String, database: String, table: String): ResponseData<Set<Column>>
+        + testExecute(param: TestExecuteParam): ResponseData<Dataframe>
+        + execute(param: ViewExecuteParam): ResponseData<Dataframe>
+        + supportedStdFunctions(sourceId: String): ResponseData<Set<StdSqlOperator>>
+        + validateFunction(sourceId: String, snippet: String): ResponseData<Boolean>
+    }
+    
+    ViewController --> ViewService
+    DataProviderController --> DataProviderService
+}
+
+package "Data Access Layer 数据访问层" #F8D7DA {
+    
+    interface ViewMapperExt {
+        + listByOrgId(orgId: String): List<View>
+        + selectActiveByPrimaryKey(id: String): View
+        + listArchived(orgId: String): List<View>
+        + listByIds(viewIds: Set<String>): List<View>
+        + deleteAll(viewId: String): int
+        + checkReference(viewId: String): int
+        + checkName(orgId: String, parentId: String, name: String): List<View>
+        ' 继承自 ViewMapper
+        + insert(view: View): int
+        + selectByPrimaryKey(id: String): View
+        + updateByPrimaryKey(view: View): int
+        + updateByPrimaryKeySelective(view: View): int
+        + deleteByPrimaryKey(id: String): int
+    }
+    
+    ViewServiceImpl --> ViewMapperExt
+}
+
+package "REST API Endpoints" #E2E3E5 {
+    
+    note as N1
+        **View(Dataset) REST API 端点**
+        
+        POST   /views/check/name      - 检查名称唯一性
+        GET    /views?orgId={orgId}   - 获取组织下所有视图
+        GET    /views/{viewId}        - 获取视图详情
+        POST   /views                 - 创建视图
+        PUT    /views/{viewId}        - 更新视图
+        PUT    /views/{viewId}/base   - 更新视图基础信息
+        DELETE /views/{viewId}        - 删除视图(支持归档)
+        GET    /views/archived        - 获取已归档视图列表
+        PUT    /views/unarchive/{viewId} - 恢复归档视图
+        
+        **Data Provider API 端点**
+        POST   /data-provider/execute/test - 测试执行SQL
+        POST   /data-provider/execute      - 执行视图查询
+    end note
+}
+
+package "Core Operations 核心操作" #FCE4EC {
+    
+    note as N2
+        **创建 (Create)**
+        1. 验证创建权限
+        2. 生成UUID
+        3. 设置状态为激活
+        4. 插入View记录
+        5. 授予角色权限
+        6. 批量创建关联变量
+        7. 设置列权限
+        
+        **查询 (Read)**
+        1. 验证读取权限
+        2. 获取View基本信息
+        3. 加载列权限关系
+        4. 加载关联变量
+        5. 加载变量主体关系
+        
+        **更新 (Update)**
+        1. 验证管理权限
+        2. 批量创建/更新/删除变量
+        3. 更新列权限
+        4. 更新数据源缓存
+        5. 更新View记录
+        
+        **删除 (Delete)**
+        1. 安全检查(子节点/图表引用)
+        2. 验证管理权限
+        3. 归档模式: 重命名+状态变更
+        4. 删除模式: 级联删除关联数据
+        
+        **执行 (Execute)**
+        1. 获取View和Source配置
+        2. 解析列权限
+        3. 解析变量(系统/组织/View级)
+        4. 构建查询脚本
+        5. 执行数据查询
+        6. 返回Dataframe结果
+    end note
+}
+
+@enduml
+

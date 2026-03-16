@@ -1,0 +1,382 @@
+@startuml View变量类型与配置项UML
+
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam backgroundColor #FEFEFE
+skinparam roundcorner 8
+skinparam class {
+    BackgroundColor #F8F9FA
+    BorderColor #495057
+    ArrowColor #6C757D
+    HeaderBackgroundColor #495057
+    FontColor #212529
+}
+
+title Datart View 变量类型与配置项 UML 图
+
+package "变量类型枚举" #E8F4F8 {
+    
+    enum VariableTypeEnum <<变量类型>> {
+        **QUERY**
+        ' 查询变量
+        ' 在VIZ中通过控制器传值
+        ' 用于动态查询条件
+        --
+        **PERMISSION**
+        ' 权限变量
+        ' 为不同角色配置不同值
+        ' 用于数据行权限控制
+    }
+    
+    note right of VariableTypeEnum
+        **QUERY (查询变量)**
+        - 用途：动态条件筛选
+        - 传值：VIZ控制器传入
+        - 场景：用户交互式查询
+        
+        **PERMISSION (权限变量)**
+        - 用途：数据行级权限
+        - 传值：系统根据角色自动注入
+        - 场景：数据安全隔离
+    end note
+    
+    enum ValueType <<值类型>> {
+        **STRING**
+        ' 字符串类型
+        --
+        **NUMERIC**
+        ' 数值类型
+        --
+        **DATE**
+        ' 日期类型
+        --
+        **BOOLEAN**
+        ' 布尔类型
+        --
+        **IDENTIFIER**
+        ' 标识符(不加引号)
+        --
+        **FRAGMENT**
+        ' SQL片段(原样输出)
+        --
+        **SNIPPET**
+        ' SQL代码片段(会被解析)
+        --
+        **KEYWORD**
+        ' SQL关键字
+    }
+    
+    note left of ValueType
+        **值处理方式**
+        
+        需加引号:
+        - STRING → 'value'
+        - DATE → '2024-01-01'
+        
+        不加引号:
+        - NUMERIC → 123.45
+        - BOOLEAN → true/false
+        - IDENTIFIER → column_name
+        - KEYWORD → ASC/DESC
+        
+        特殊处理:
+        - FRAGMENT → 原样替换
+        - SNIPPET → SQL解析后替换
+    end note
+    
+    enum SubjectType <<主体类型>> {
+        **USER**
+        ' 用户
+        --
+        **ROLE**
+        ' 角色
+        --
+        **USER_ROLE**
+        ' 用户角色组合
+    }
+}
+
+package "变量实体模型" #FFF3CD {
+    
+    abstract class BaseEntity {
+        - id: String
+        - createBy: String
+        - createTime: Date
+        - updateBy: String
+        - updateTime: Date
+    }
+    
+    class Variable <<变量配置>> {
+        - orgId: String
+        - viewId: String
+        - sourceId: String
+        --
+        **基本配置**
+        - name: String
+        - label: String
+        - type: String
+        - valueType: String
+        --
+        **值配置**
+        - defaultValue: String
+        - format: String
+        - encrypt: Boolean
+        - expression: Boolean
+    }
+    
+    note bottom of Variable
+        **配置项说明**
+        
+        name: 变量名称(SQL中引用)
+        label: 显示标签(UI展示)
+        type: 变量类型(QUERY/PERMISSION)
+        valueType: 值类型(STRING/NUMERIC等)
+        
+        defaultValue: 默认值(JSON数组格式)
+        format: 日期格式(DATE类型使用)
+        encrypt: 是否加密存储
+        expression: 是否为表达式
+        
+        作用域:
+        orgId: 组织级变量
+        viewId: View级变量
+        sourceId: 数据源级变量
+    end note
+    
+    class RelVariableSubject <<变量-主体关系>> {
+        - variableId: String
+        - subjectId: String
+        - subjectType: String
+        - value: String
+        - useDefaultValue: Boolean
+    }
+    
+    note right of RelVariableSubject
+        **权限变量值配置**
+        
+        subjectId: 用户ID或角色ID
+        subjectType: USER/ROLE
+        value: 为该主体配置的值(JSON数组)
+        useDefaultValue: 是否使用变量默认值
+        
+        示例:
+        角色"销售部"的权限变量:
+        - subjectId: "role_sales_123"
+        - subjectType: "ROLE"
+        - value: '["华东","华南"]'
+    end note
+    
+    class ScriptVariable <<脚本变量>> {
+        - name: String
+        - type: VariableTypeEnum
+        - valueType: ValueType
+        - values: Set<String>
+        - format: String
+        - expression: boolean
+        - disabled: boolean
+        - nameWithQuote: String
+        --
+        + getNameWithQuote(): String
+        + valueToString(): String
+        + toString(): String
+    }
+    
+    class VariableValue <<变量值DTO>> {
+        - relId: String
+        - variableId: String
+        - orgId: String
+        - viewId: String
+        - sourceId: String
+        - format: String
+        - name: String
+        - type: String
+        - valueType: String
+        - label: String
+        - subjectId: String
+        - subjectType: String
+        - values: Set<String>
+        - defaultValue: String
+        - expression: boolean
+    }
+    
+    Variable --|> BaseEntity
+    RelVariableSubject --|> BaseEntity
+    Variable "1" --> "*" RelVariableSubject : hasValues
+    Variable ..> VariableTypeEnum : type
+    Variable ..> ValueType : valueType
+    ScriptVariable ..> VariableTypeEnum : type
+    ScriptVariable ..> ValueType : valueType
+    RelVariableSubject ..> SubjectType : subjectType
+}
+
+package "变量服务层" #D4EDDA {
+    
+    interface VariableService {
+        + checkUnique(orgId, viewId, name): boolean
+        + create(param: VariableCreateParam): Variable
+        + listOrgVariables(orgId): List<Variable>
+        + listByView(viewId): List<Variable>
+        + listViewVariableRels(viewId): List<RelVariableSubject>
+        + listViewVarValuesByUser(userId, viewId): List<VariableValue>
+        + listOrgValue(orgId): List<VariableValue>
+        + listOrgQueryVariables(orgId): List<Variable>
+        + listViewQueryVariables(viewId): List<Variable>
+        + batchInsert(params): List<Variable>
+        + batchUpdate(params): boolean
+        + deleteByIds(variableIds): boolean
+        + updateRels(param): boolean
+        + createRel(rel): RelVariableSubject
+        + createRels(rels): List<RelVariableSubject>
+        + deleteRel(relIds): boolean
+        + delViewVariables(viewId): boolean
+    }
+    
+    class VariableController {
+        --
+        POST /variables/check/name
+        GET /variables/org?orgId=
+        GET /variables/view?viewId=
+        POST /variables
+        PUT /variables
+        DELETE /variables?variables=
+        PUT /variables/rel
+        GET /variables/subject/value
+        GET /variables/value?variableId=
+    }
+    
+    VariableController --> VariableService
+}
+
+package "变量替换引擎" #FCE4EC {
+    
+    class VariablePlaceholder <<SQL变量替换>> {
+        - variables: List<ScriptVariable>
+        - sqlDialect: SqlDialect
+        - sqlCall: SqlCall
+        - originalSqlFragment: String
+        --
+        + replacementPair(): ReplacementPair
+        # autoFixSqlCall(variable): SqlCall
+        # replaceVariable(sqlCall, variable)
+        # reduceVariableToMin(variable)
+        # reduceVariableToMax(variable)
+        - replacePermissionVariable(variables): ReplacementPair
+        - replaceQueryVariable(variables): ReplacementPair
+        # formatValue(variable): String
+        # formatWithQuote(values): String
+        # formatWithoutQuote(values): String
+    }
+    
+    note bottom of VariablePlaceholder
+        **权限变量替换规则**
+        1. 变量不存在 → 1=1 (忽略条件)
+        2. 变量值为空 → 1=0 (拒绝所有)
+        3. 变量被禁用 → 1=1 (组织Owner)
+        4. 单值 → 直接替换
+        5. 多值 → 根据操作符优化
+        
+        **查询变量替换规则**
+        1. 变量不存在 → 保持原样
+        2. 变量值为空 → IS NULL
+        3. 多值且逻辑表达式 → 自动优化
+        4. 其它 → 直接替换
+        
+        **操作符优化**
+        = → IN (...)
+        != → NOT IN (...)
+        > → 取最小值
+        < → 取最大值
+        LIKE → OR 连接
+        NOT LIKE → AND 连接
+    end note
+}
+
+package "系统内置变量" #E2E3E5 {
+    
+    note as SystemVars
+        **系统内置变量 (权限变量)**
+        
+        | 变量名 | 说明 | 值来源 |
+        |--------|------|--------|
+        | DATART_USER_ID | 用户ID | getCurrentUser().getId() |
+        | DATART_USER_NAME | 用户姓名 | getCurrentUser().getName() |
+        | DATART_USER_USERNAME | 用户名 | getCurrentUser().getUsername() |
+        | DATART_USER_EMAIL | 用户邮箱 | getCurrentUser().getEmail() |
+        
+        **使用示例**
+        ```sql
+        SELECT * FROM orders
+        WHERE user_id = $DATART_USER_ID$
+        ```
+        
+        这些变量自动注入，无需手动配置
+    end note
+}
+
+package "变量使用示例" #F8D7DA {
+    
+    note as Examples
+        **1. 查询变量 (QUERY) 配置示例**
+        
+        变量名: department
+        类型: QUERY
+        值类型: STRING
+        默认值: ["销售部"]
+        
+        SQL使用:
+        ```sql
+        SELECT * FROM employee
+        WHERE dept = $department$
+        ```
+        
+        **2. 权限变量 (PERMISSION) 配置示例**
+        
+        变量名: region
+        类型: PERMISSION
+        值类型: STRING
+        
+        角色配置:
+        - 销售角色: ["华东", "华南"]
+        - 运营角色: ["华北", "西南"]
+        
+        SQL使用:
+        ```sql
+        SELECT * FROM sales
+        WHERE region IN ($region$)
+        ```
+        
+        **3. 日期变量配置示例**
+        
+        变量名: start_date
+        类型: QUERY
+        值类型: DATE
+        格式: yyyy-MM-dd
+        默认值: ["2024-01-01"]
+        表达式: false
+        
+        SQL使用:
+        ```sql
+        SELECT * FROM orders
+        WHERE order_date >= $start_date$
+        ```
+        
+        **4. 表达式变量示例**
+        
+        变量名: date_expr
+        类型: QUERY
+        值类型: DATE
+        格式: yyyy-MM-dd
+        默认值: ["CURRENT_DATE - INTERVAL 7 DAY"]
+        表达式: true (expression=true)
+        
+        SQL使用:
+        ```sql
+        SELECT * FROM logs
+        WHERE log_date >= $date_expr$
+        ```
+        输出: log_date >= CURRENT_DATE - INTERVAL 7 DAY
+    end note
+}
+
+@enduml
+

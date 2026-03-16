@@ -1,0 +1,224 @@
+@startuml View变量处理流程序列图
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam roundcorner 8
+skinparam sequenceArrowThickness 2
+
+title Datart View 变量处理流程序列图
+
+actor 用户 as User
+participant "控制器\nViewController" as VC
+participant "数据服务\nDataProviderService" as DPS
+participant "变量服务\nVariableService" as VS
+participant "变量替换\nVariablePlaceholder" as VP
+participant "SQL渲染\nSqlScriptRender" as SR
+database "数据库" as DB
+
+== 变量配置流程 ==
+
+User -> VC: 创建/编辑View\n(包含变量配置)
+activate VC
+
+VC -> VS: batchInsert(variablesToCreate)
+activate VS
+
+VS -> VS: checkUnique(orgId, viewId, name)
+note right: 检查变量名唯一性
+
+VS -> DB: INSERT INTO variable
+DB --> VS: success
+
+alt 包含权限变量值配置
+    VS -> DB: INSERT INTO rel_variable_subject
+    note right
+        配置不同角色的变量值
+        roleA → ["华东", "华南"]
+        roleB → ["华北"]
+    end note
+end
+
+VS --> VC: List<Variable>
+deactivate VS
+
+VC --> User: 保存成功
+deactivate VC
+
+== 查询执行流程 (变量解析) ==
+
+User -> DPS: execute(ViewExecuteParam)
+activate DPS
+
+note over DPS
+    ViewExecuteParam包含:
+    - viewId: View标识
+    - params: 查询变量值 Map<String, Set<String>>
+end note
+
+DPS -> DPS: retrieve(viewId, View)
+DPS -> DPS: retrieve(sourceId, Source)
+
+DPS -> DPS: parseVariables(view, param)
+activate DPS #LightBlue
+
+note right of DPS
+    **变量解析顺序**
+    1. 系统内置变量
+    2. 组织级变量
+    3. View级变量
+end note
+
+DPS -> DPS: getSysVariables()
+note right
+    注入系统变量:
+    - DATART_USER_ID
+    - DATART_USER_NAME
+    - DATART_USER_USERNAME
+    - DATART_USER_EMAIL
+end note
+
+DPS -> VS: listOrgValue(orgId)
+activate VS
+VS -> DB: SELECT org variables
+VS -> VS: convertVariables()
+note right
+    权限变量:
+    查询当前用户角色
+    获取对应变量值
+end note
+VS --> DPS: List<VariableValue>
+deactivate VS
+
+DPS -> VS: listViewVarValuesByUser(userId, viewId)
+activate VS
+VS -> DB: SELECT view variables
+VS --> DPS: List<VariableValue>
+deactivate VS
+
+loop 处理QUERY类型变量
+    alt 参数中有传值
+        DPS -> DPS: variable.setValues(params.get(name))
+    else 没有传值但是表达式
+        DPS -> DPS: variable.setValueType(FRAGMENT)
+        note right: 表达式作为默认值直接输出
+    end
+end
+
+deactivate DPS
+
+alt 当前用户是组织Owner
+    DPS -> DPS: disablePermissionVariables()
+    note right: 禁用权限变量\n(Owner看所有数据)
+end
+
+DPS -> DPS: 构建QueryScript
+note right
+    QueryScript:
+    - script: SQL脚本
+    - variables: 变量列表
+    - scriptType: SQL/STRUCT
+end note
+
+DPS -> SR: render(queryScript)
+activate SR
+
+== 变量替换流程 ==
+
+SR -> SR: 解析SQL中的变量占位符
+note right: 查找 $varName$ 模式
+
+loop 每个变量占位符
+    SR -> VP: new VariablePlaceholder(variables, sqlCall)
+    activate VP
+    
+    VP -> VP: replacementPair()
+    
+    alt 权限变量 (PERMISSION)
+        VP -> VP: replacePermissionVariable()
+        
+        alt 变量不存在
+            VP --> SR: "1=1" (忽略条件)
+        else 变量值为空
+            VP --> SR: "1=0" (拒绝所有)
+        else 变量被禁用(Owner)
+            VP --> SR: "1=1"
+        else 单值
+            VP -> VP: replaceVariable()
+            VP --> SR: 替换后的SQL片段
+        else 多值
+            VP -> VP: autoFixSqlCall()
+            note right
+                = → IN(...)
+                != → NOT IN(...)
+                > → MIN(values)
+                < → MAX(values)
+                LIKE → OR连接
+            end note
+            VP --> SR: 优化后的SQL片段
+        end
+        
+    else 查询变量 (QUERY)
+        VP -> VP: replaceQueryVariable()
+        
+        alt 变量值为空
+            VP --> SR: "IS NULL" 条件
+        else 多值+逻辑表达式
+            VP -> VP: autoFixSqlCall()
+            VP --> SR: 优化后的SQL片段
+        else 其它情况
+            VP -> VP: replaceVariable()
+            VP --> SR: 替换后的SQL片段
+        end
+    end
+    
+    deactivate VP
+end
+
+SR -> SR: 组装最终SQL
+
+SR --> DPS: 最终SQL语句
+deactivate SR
+
+DPS -> DB: 执行SQL
+DB --> DPS: ResultSet
+
+DPS -> DPS: 构建Dataframe
+
+DPS --> User: Dataframe结果
+deactivate DPS
+
+== 权限变量值配置流程 ==
+
+User -> VC: 配置角色权限变量值
+activate VC
+
+VC -> VS: updateRels(VariableRelUpdateParam)
+activate VS
+
+note over VS
+    VariableRelUpdateParam:
+    - relToCreate: 新增关系
+    - relToUpdate: 更新关系
+    - relToDelete: 删除关系
+end note
+
+alt 有新增
+    VS -> DB: INSERT rel_variable_subject
+end
+
+alt 有更新
+    VS -> DB: UPDATE rel_variable_subject
+end
+
+alt 有删除
+    VS -> DB: DELETE rel_variable_subject
+end
+
+VS --> VC: success
+deactivate VS
+
+VC --> User: 配置成功
+deactivate VC
+
+@enduml
+

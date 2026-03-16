@@ -1,0 +1,254 @@
+@startuml View(Dataset)核心操作序列图
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam roundcorner 8
+skinparam sequenceArrowThickness 2
+skinparam participantPadding 20
+
+title Datart View(Dataset) 核心操作序列图
+
+actor Client as "客户端"
+participant ViewController as "ViewController\n视图控制器"
+participant ViewService as "ViewServiceImpl\n视图服务"
+participant DataProviderService as "DataProviderService\n数据提供服务"
+participant ViewMapper as "ViewMapperExt\n数据访问"
+participant VariableService as "VariableService\n变量服务"
+participant RoleService as "RoleService\n角色服务"
+database Database as "数据库"
+
+== 创建视图 (Create View) ==
+
+Client -> ViewController: POST /views\n(ViewCreateParam)
+activate ViewController
+
+ViewController -> ViewService: create(param)
+activate ViewService
+
+ViewService -> ViewService: 生成UUID
+ViewService -> ViewService: requirePermission(view, CREATE)
+ViewService -> ViewMapper: insert(view)
+activate ViewMapper
+ViewMapper -> Database: INSERT INTO view
+Database --> ViewMapper: success
+ViewMapper --> ViewService: 1
+deactivate ViewMapper
+
+ViewService -> RoleService: grantPermission(permissions)
+activate RoleService
+RoleService -> Database: 授予角色权限
+RoleService --> ViewService: success
+deactivate RoleService
+
+alt 包含变量创建
+    ViewService -> VariableService: batchInsert(variablesToCreate)
+    activate VariableService
+    VariableService -> Database: 批量插入变量
+    VariableService --> ViewService: success
+    deactivate VariableService
+end
+
+alt 包含列权限
+    ViewService -> ViewMapper: rscMapper.batchInsert(columnPermission)
+    ViewMapper -> Database: 批量插入列权限
+end
+
+ViewService -> ViewService: getViewDetail(viewId)
+ViewService --> ViewController: ViewDetailDTO
+deactivate ViewService
+
+ViewController --> Client: ResponseData<View>
+deactivate ViewController
+
+== 获取视图详情 (Get View Detail) ==
+
+Client -> ViewController: GET /views/{viewId}
+activate ViewController
+
+ViewController -> ViewService: getViewDetail(viewId)
+activate ViewService
+
+ViewService -> ViewMapper: selectByPrimaryKey(viewId)
+activate ViewMapper
+ViewMapper -> Database: SELECT * FROM view
+Database --> ViewMapper: View
+ViewMapper --> ViewService: View
+deactivate ViewMapper
+
+ViewService -> ViewService: requirePermission(view, READ)
+
+ViewService -> ViewMapper: rscMapper.listByView(viewId)
+ViewMapper --> ViewService: List<RelSubjectColumns>
+
+ViewService -> VariableService: listByView(viewId)
+activate VariableService
+VariableService --> ViewService: List<Variable>
+deactivate VariableService
+
+ViewService -> VariableService: listViewVariableRels(viewId)
+activate VariableService
+VariableService --> ViewService: List<RelVariableSubject>
+deactivate VariableService
+
+ViewService --> ViewController: ViewDetailDTO
+deactivate ViewService
+
+ViewController --> Client: ResponseData<ViewDetailDTO>
+deactivate ViewController
+
+== 更新视图 (Update View) ==
+
+Client -> ViewController: PUT /views/{viewId}\n(ViewUpdateParam)
+activate ViewController
+
+ViewController -> ViewService: updateView(param)
+activate ViewService
+
+ViewService -> ViewMapper: selectByPrimaryKey(viewId)
+ViewMapper --> ViewService: View
+
+ViewService -> ViewService: requirePermission(view, MANAGE)
+
+alt 有变量创建
+    ViewService -> VariableService: batchInsert(variablesToCreate)
+end
+
+alt 有变量更新
+    ViewService -> VariableService: batchUpdate(variablesToUpdate)
+end
+
+alt 有变量删除
+    ViewService -> VariableService: deleteByIds(variableToDelete)
+end
+
+alt 列权限更新
+    ViewService -> ViewMapper: rscMapper.deleteByView(viewId)
+    ViewService -> ViewMapper: rscMapper.batchInsert(columnPermission)
+end
+
+ViewService -> DataProviderService: updateSource(source)
+activate DataProviderService
+DataProviderService --> ViewService: void
+deactivate DataProviderService
+
+ViewService -> ViewMapper: updateByPrimaryKey(view)
+ViewMapper -> Database: UPDATE view
+ViewMapper --> ViewService: 1
+
+ViewService -> ViewService: getViewDetail(viewId)
+ViewService --> ViewController: View
+deactivate ViewService
+
+ViewController --> Client: ResponseData<View>
+deactivate ViewController
+
+== 删除视图 (Delete View) ==
+
+Client -> ViewController: DELETE /views/{viewId}?archive=true
+activate ViewController
+
+ViewController -> ViewService: delete(viewId, archive)
+activate ViewService
+
+ViewService -> ViewService: safeDelete(viewId)
+note right: 检查子节点和图表引用
+
+ViewService -> ViewMapper: selectByPrimaryKey(viewId)
+ViewMapper --> ViewService: View
+
+ViewService -> ViewService: requirePermission(view, MANAGE)
+
+alt archive = true (归档)
+    ViewService -> ViewService: 重命名: name + timestamp
+    ViewService -> ViewMapper: updateByPrimaryKeySelective\n(status=ARCHIVED)
+else archive = false (永久删除)
+    ViewService -> ViewService: deletePermissions(view)
+    ViewService -> ViewService: deleteReference(view)
+    note right: 删除变量关系、列权限、变量
+    ViewService -> ViewMapper: deleteByPrimaryKey(viewId)
+end
+
+ViewService --> ViewController: true
+deactivate ViewService
+
+ViewController --> Client: ResponseData<Boolean>
+deactivate ViewController
+
+== 执行视图查询 (Execute View Query) ==
+
+Client -> DataProviderService: POST /data-provider/execute\n(ViewExecuteParam)
+activate DataProviderService
+
+DataProviderService -> ViewService: retrieve(viewId)
+activate ViewService
+ViewService --> DataProviderService: View
+deactivate ViewService
+
+DataProviderService -> DataProviderService: retrieve(sourceId, Source)
+DataProviderService -> DataProviderService: parseDataProviderConfig(source)
+
+DataProviderService -> DataProviderService: parseColumnPermission(view)
+note right: 解析列级权限
+
+DataProviderService -> DataProviderService: parseVariables(view, param)
+note right
+    1. 获取系统变量 (用户信息)
+    2. 获取组织变量
+    3. 获取View自定义变量
+    4. 参数值替换
+end note
+
+DataProviderService -> DataProviderService: 构建QueryScript
+DataProviderService -> DataProviderService: 构建ExecuteParam
+
+DataProviderService -> DataProviderService: dataProviderManager.execute\n(providerSource, queryScript, executeParam)
+note right: 执行SQL查询
+
+DataProviderService --> Client: ResponseData<Dataframe>
+deactivate DataProviderService
+
+== 导出视图资源 (Export View Resource) ==
+
+Client -> ViewService: exportResource(config, ids)
+activate ViewService
+
+loop for each viewId
+    ViewService -> ViewService: retrieve(viewId)
+    ViewService -> ViewService: securityManager.requireOrgOwner
+    ViewService -> VariableService: listByView(viewId)
+    
+    alt withParents = true
+        ViewService -> ViewService: getAllParents(parentId)
+    end
+end
+
+ViewService --> Client: ViewResourceModel
+deactivate ViewService
+
+== 导入视图资源 (Import View Resource) ==
+
+Client -> ViewService: importResource(model, strategy, orgId)
+activate ViewService
+
+alt strategy = OVERWRITE
+    ViewService -> ViewService: importView(model, orgId, true)
+    note right: 先删除已存在的
+else strategy = ROLLBACK
+    ViewService -> ViewService: importView(model, orgId, false)
+end
+
+ViewService -> ViewService: checkUnique (检查名称)
+ViewService -> ViewMapper: insert(view)
+ViewService -> VariableService: batchInsert(variables)
+
+alt 有父节点
+    loop for each parent
+        ViewService -> ViewMapper: insert(parent)
+    end
+end
+
+ViewService --> Client: true
+deactivate ViewService
+
+@enduml
+

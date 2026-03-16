@@ -1,0 +1,170 @@
+@startuml View(Dataset)状态机图
+
+!theme plain
+skinparam backgroundColor #FEFEFE
+skinparam roundcorner 8
+
+skinparam state {
+    BackgroundColor #F8F9FA
+    BorderColor #495057
+    ArrowColor #6C757D
+    StartColor #28A745
+    EndColor #DC3545
+}
+
+title Datart View(Dataset) 生命周期状态图
+
+state "View 生命周期" as ViewLifecycle {
+    
+    [*] --> 创建中 : create()
+    
+    state 创建中 {
+        state "验证权限" as ValidateCreate
+        state "生成ID" as GenerateId
+        state "插入记录" as InsertRecord
+        state "授权角色" as GrantRole
+        state "创建变量" as CreateVar
+        state "设置列权限" as SetColPerm
+        
+        [*] --> ValidateCreate
+        ValidateCreate --> GenerateId : 权限通过
+        GenerateId --> InsertRecord
+        InsertRecord --> GrantRole
+        GrantRole --> CreateVar : [有变量]
+        GrantRole --> SetColPerm : [无变量]
+        CreateVar --> SetColPerm
+        SetColPerm --> [*]
+    }
+    
+    创建中 --> 激活状态 : status = ACTIVE (1)
+    
+    state 激活状态 #LightGreen {
+        state "可查询" as Queryable
+        state "可编辑" as Editable
+        state "可执行" as Executable
+        
+        [*] --> Queryable
+        Queryable --> Editable : 有MANAGE权限
+        Editable --> Queryable
+        Queryable --> Executable : execute()
+        Executable --> Queryable : 返回结果
+    }
+    
+    激活状态 --> 更新中 : update()
+    
+    state 更新中 {
+        state "验证管理权限" as ValidateManage
+        state "更新变量" as UpdateVar
+        state "更新列权限" as UpdateColPerm
+        state "更新配置" as UpdateConfig
+        state "刷新缓存" as RefreshCache
+        
+        [*] --> ValidateManage
+        ValidateManage --> UpdateVar : 权限通过
+        UpdateVar --> UpdateColPerm
+        UpdateColPerm --> UpdateConfig
+        UpdateConfig --> RefreshCache
+        RefreshCache --> [*]
+    }
+    
+    更新中 --> 激活状态 : 更新完成
+    
+    激活状态 --> 归档检查 : delete(archive=true)
+    
+    state 归档检查 <<choice>>
+    
+    归档检查 --> 归档失败 : [有子节点或图表引用]
+    归档检查 --> 归档中 : [安全检查通过]
+    
+    归档失败 --> 激活状态 : 返回错误
+    
+    state 归档中 {
+        state "重命名" as Rename
+        state "修改状态" as ChangeStatus
+        
+        [*] --> Rename
+        Rename --> ChangeStatus : name + timestamp
+        ChangeStatus --> [*]
+    }
+    
+    归档中 --> 已归档状态 : status = ARCHIVED (0)
+    
+    state 已归档状态 #Orange {
+        state "不可查询" as NotQueryable
+        state "不可执行" as NotExecutable
+        state "等待恢复或删除" as WaitAction
+        
+        [*] --> NotQueryable
+        NotQueryable --> WaitAction
+        NotExecutable --> WaitAction
+    }
+    
+    已归档状态 --> 恢复中 : unarchive()
+    
+    state 恢复中 {
+        state "验证名称" as ValidateName
+        state "更新名称" as UpdateName
+        state "更新状态" as UpdateStatus
+        state "更新位置" as UpdatePosition
+        
+        [*] --> ValidateName
+        ValidateName --> UpdateName : [名称可用]
+        ValidateName --> ValidateName : [名称重复\n用户重命名]
+        UpdateName --> UpdatePosition
+        UpdatePosition --> UpdateStatus
+        UpdateStatus --> [*]
+    }
+    
+    恢复中 --> 激活状态 : status = ACTIVE (1)
+    
+    激活状态 --> 删除检查 : delete(archive=false)
+    已归档状态 --> 删除检查 : delete(archive=false)
+    
+    state 删除检查 <<choice>>
+    
+    删除检查 --> 删除失败 : [有子节点或图表引用]
+    删除检查 --> 删除中 : [安全检查通过]
+    
+    删除失败 --> 激活状态 : 返回错误
+    
+    state 删除中 {
+        state "删除权限关系" as DeletePerm
+        state "删除变量关系" as DeleteVarRel
+        state "删除列权限" as DeleteColPerm
+        state "删除变量" as DeleteVar
+        state "删除记录" as DeleteRecord
+        
+        [*] --> DeletePerm
+        DeletePerm --> DeleteVarRel
+        DeleteVarRel --> DeleteColPerm
+        DeleteColPerm --> DeleteVar
+        DeleteVar --> DeleteRecord
+        DeleteRecord --> [*]
+    }
+    
+    删除中 --> [*] : 永久删除
+}
+
+note right of 激活状态
+    **激活状态权限**
+    - READ: 可查看/查询
+    - MANAGE: 可编辑/删除
+    - CREATE: 可创建子节点
+end note
+
+note right of 已归档状态
+    **归档状态**
+    - 保留数据但不可使用
+    - 可恢复到激活状态
+    - 可永久删除
+end note
+
+note bottom of 删除检查
+    **安全删除检查**
+    - 检查是否有子View引用
+    - 检查是否被Datachart使用
+    - 检查是否被Widget引用
+end note
+
+@enduml
+
